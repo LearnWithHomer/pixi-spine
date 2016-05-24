@@ -8,7 +8,369 @@ module.exports = PIXI.spine = {
     loaders:        require('./loaders')
 };
 
-},{"./Spine":45,"./SpineRuntime":43,"./loaders":49}],2:[function(require,module,exports){
+},{"./Spine":2,"./SpineRuntime":44,"./loaders":49}],2:[function(require,module,exports){
+var spine = require('../SpineRuntime');
+var atlasParser = require('../loaders/atlasParser');
+
+/* Esoteric Software SPINE wrapper for pixi.js */
+spine.Bone.yDown = true;
+
+/**
+ * A class that enables the you to import and run your spine animations in pixi.
+ * The Spine animation data needs to be loaded using either the Loader or a SpineLoader before it can be used by this class
+ * See example 12 (http://www.goodboydigital.com/pixijs/examples/12/) to see a working example and check out the source
+ *
+ * ```js
+ * var spineAnimation = new PIXI.Spine(spineData);
+ * ```
+ *
+ * @class
+ * @extends Container
+ * @memberof PIXI.spine
+ * @param spineData {object} The spine data loaded from a spine atlas.
+ */
+function Spine(spineData)
+{
+    PIXI.Container.call(this);
+
+    if (!spineData)
+    {
+        throw new Error('The spineData param is required.');
+    }
+
+    if ((typeof spineData) === "string")
+    {
+        throw new Error('spineData param cant be string. Please use PIXI.spine.Spine.fromAtlas("YOUR_RESOURCE_NAME") from now on.');
+    }
+
+    /**
+     * The spineData object
+     *
+     * @member {object}
+     */
+    this.spineData = spineData;
+
+    /**
+     * A spine Skeleton object
+     *
+     * @member {object}
+     */
+    this.skeleton = new spine.Skeleton(spineData);
+    this.skeleton.updateWorldTransform();
+
+    /**
+     * A spine AnimationStateData object created from the spine data passed in the constructor
+     *
+     * @member {object}
+     */
+    this.stateData = new spine.AnimationStateData(spineData);
+
+    /**
+     * A spine AnimationState object created from the spine AnimationStateData object
+     *
+     * @member {object}
+     */
+    this.state = new spine.AnimationState(this.stateData);
+
+    /**
+     * An array of containers
+     *
+     * @member {Container[]}
+     */
+    this.slotContainers = [];
+
+    for (var i = 0, n = this.skeleton.slots.length; i < n; i++)
+    {
+        var slot = this.skeleton.slots[i];
+        var attachment = slot.attachment;
+        var slotContainer = new PIXI.Container();
+        this.slotContainers.push(slotContainer);
+        this.addChild(slotContainer);
+
+        if (attachment instanceof spine.RegionAttachment)
+        {
+            var spriteName = attachment.rendererObject.name;
+            var sprite = this.createSprite(slot, attachment);
+            slot.currentSprite = sprite;
+            slot.currentSpriteName = spriteName;
+            slotContainer.addChild(sprite);
+        }
+        else if (attachment instanceof spine.MeshAttachment)
+        {
+            var mesh = this.createMesh(slot, attachment);
+            slot.currentMesh = mesh;
+            slot.currentMeshName = attachment.name;
+            slotContainer.addChild(mesh);
+        }
+        else
+        {
+            continue;
+        }
+
+    }
+
+    /**
+     * Should the Spine object update its transforms
+     *
+     * @member {boolean}
+     */
+    this.autoUpdate = true;
+}
+
+Spine.fromAtlas = function(resourceName) {
+    var skeletonData = atlasParser.AnimCache[resourceName];
+
+    if (!skeletonData)
+    {
+        throw new Error('Spine data "' + resourceName + '" does not exist in the animation cache');
+    }
+
+    return new Spine(skeletonData);
+}
+
+Spine.prototype = Object.create(PIXI.Container.prototype);
+Spine.prototype.constructor = Spine;
+module.exports = Spine;
+
+Spine.globalAutoUpdate = true;
+
+Object.defineProperties(Spine.prototype, {
+    /**
+     * If this flag is set to true, the spine animation will be autoupdated every time
+     * the object id drawn. The down side of this approach is that the delta time is
+     * automatically calculated and you could miss out on cool effects like slow motion,
+     * pause, skip ahead and the sorts. Most of these effects can be achieved even with
+     * autoupdate enabled but are harder to achieve.
+     *
+     * @member {boolean}
+     * @memberof Spine#
+     * @default true
+     */
+    autoUpdate: {
+        get: function ()
+        {
+            return (this.updateTransform === Spine.prototype.autoUpdateTransform);
+        },
+
+        set: function (value)
+        {
+            this.updateTransform = value ? Spine.prototype.autoUpdateTransform : PIXI.Container.prototype.updateTransform;
+        }
+    }
+});
+
+/**
+ * Update the spine skeleton and its animations by delta time (dt)
+ *
+ * @param dt {number} Delta time. Time by which the animation should be updated
+ */
+Spine.prototype.update = function (dt)
+{
+    this.state.update(dt);
+    this.state.apply(this.skeleton);
+    this.skeleton.updateWorldTransform();
+
+    var drawOrder = this.skeleton.drawOrder;
+    var slots = this.skeleton.slots;
+
+    for (var i = 0, n = drawOrder.length; i < n; i++)
+    {
+        this.children[i] = this.slotContainers[drawOrder[i]];
+    }
+
+    for (i = 0, n = slots.length; i < n; i++)
+    {
+        var slot = slots[i];
+        var attachment = slot.attachment;
+        var slotContainer = this.slotContainers[i];
+
+        if (!attachment)
+        {
+            slotContainer.visible = false;
+            continue;
+        }
+
+        var type = attachment.type;
+        if (type === spine.AttachmentType.region)
+        {
+            if (attachment.rendererObject)
+            {
+                if (!slot.currentSpriteName || slot.currentSpriteName !== attachment.rendererObject.name)
+                {
+                    var spriteName = attachment.rendererObject.name;
+                    if (slot.currentSprite !== undefined)
+                    {
+                        slot.currentSprite.visible = false;
+                    }
+                    slot.sprites = slot.sprites || {};
+                    if (slot.sprites[spriteName] !== undefined)
+                    {
+                        slot.sprites[spriteName].visible = true;
+                    }
+                    else
+                    {
+                        var sprite = this.createSprite(slot, attachment);
+                        slotContainer.addChild(sprite);
+                    }
+                    slot.currentSprite = slot.sprites[spriteName];
+                    slot.currentSpriteName = spriteName;
+                }
+            }
+
+            if (slotContainer.transform ) {
+                //PIXI v4.0
+                if (!slotContainer.transform._dirtyLocal) {
+                    slotContainer.transform = new PIXI.TransformStatic();
+                }
+                var transform = slotContainer.transform;
+                var lt = transform.localTransform;
+                transform._dirtyParentVersion = -1;
+                transform._dirtyLocal = 1;
+                transform._versionLocal = 1;
+                slot.bone.matrix.copy(lt);
+                lt.tx += slot.bone.skeleton.x;
+                lt.ty += slot.bone.skeleton.y;
+            } else {
+                //PIXI v3
+                var lt = slotContainer.localTransform || new PIXI.Matrix();
+                slot.bone.matrix.copy(lt);
+                lt.tx += slot.bone.skeleton.x;
+                lt.ty += slot.bone.skeleton.y;
+                slotContainer.localTransform = lt;
+                slotContainer.displayObjectUpdateTransform = SlotContainerUpdateTransformV3;
+            }
+
+            slot.currentSprite.blendMode = slot.blendMode;
+            slot.currentSprite.tint = PIXI.utils.rgb2hex([slot.r,slot.g,slot.b]);
+        }
+        else if (type === spine.AttachmentType.skinnedmesh || type === spine.AttachmentType.mesh)
+        {
+            if (!slot.currentMeshName || slot.currentMeshName !== attachment.name)
+            {
+                var meshName = attachment.name;
+                if (slot.currentMesh !== undefined)
+                {
+                    slot.currentMesh.visible = false;
+                }
+
+                slot.meshes = slot.meshes || {};
+
+                if (slot.meshes[meshName] !== undefined)
+                {
+                    slot.meshes[meshName].visible = true;
+                }
+                else
+                {
+                    var mesh = this.createMesh(slot, attachment);
+                    slotContainer.addChild(mesh);
+                }
+
+                slot.currentMesh = slot.meshes[meshName];
+                slot.currentMeshName = meshName;
+            }
+            attachment.computeWorldVertices(slot.bone.skeleton.x, slot.bone.skeleton.y, slot, slot.currentMesh.vertices);
+        }
+        else
+        {
+            slotContainer.visible = false;
+            continue;
+        }
+        slotContainer.visible = true;
+
+        slotContainer.alpha = slot.a;
+    }
+};
+
+/**
+ * When autoupdate is set to yes this function is used as pixi's updateTransform function
+ *
+ * @private
+ */
+Spine.prototype.autoUpdateTransform = function ()
+{
+    if (Spine.globalAutoUpdate) {
+        this.lastTime = this.lastTime || Date.now();
+        var timeDelta = (Date.now() - this.lastTime) * 0.001;
+        this.lastTime = Date.now();
+        this.update(timeDelta);
+    } else {
+        this.lastTime = 0;
+    }
+
+    PIXI.Container.prototype.updateTransform.call(this);
+};
+
+/**
+ * Create a new sprite to be used with spine.RegionAttachment
+ *
+ * @param slot {spine.Slot} The slot to which the attachment is parented
+ * @param attachment {spine.RegionAttachment} The attachment that the sprite will represent
+ * @private
+ */
+Spine.prototype.createSprite = function (slot, attachment)
+{
+    var descriptor = attachment.rendererObject;
+    var texture = descriptor.texture;
+    var sprite = new PIXI.Sprite(texture);
+    sprite.scale.x = attachment.scaleX * attachment.width / descriptor.originalWidth;
+    sprite.scale.y = - attachment.scaleY * attachment.height / descriptor.originalHeight;
+    sprite.rotation = attachment.rotation * spine.degRad;
+    sprite.anchor.x = 0.5;
+    sprite.anchor.y = 0.5;
+    sprite.position.x = attachment.x;
+    sprite.position.y = attachment.y;
+    sprite.alpha = attachment.a;
+
+    slot.sprites = slot.sprites || {};
+    slot.sprites[descriptor.name] = sprite;
+    return sprite;
+};
+
+/**
+ * Creates a Strip from the spine data
+ * @param slot {spine.Slot} The slot to which the attachment is parented
+ * @param attachment {spine.RegionAttachment} The attachment that the sprite will represent
+ * @private
+ */
+Spine.prototype.createMesh = function (slot, attachment)
+{
+    var descriptor = attachment.rendererObject;
+    var baseTexture = descriptor.page.rendererObject;
+    var texture = new PIXI.Texture(baseTexture);
+
+    var strip = new PIXI.mesh.Mesh(
+        texture,
+        new Float32Array(attachment.uvs.length),
+        new Float32Array(attachment.uvs),
+        new Uint16Array(attachment.triangles),
+        PIXI.mesh.Mesh.DRAW_MODES.TRIANGLES);
+
+    strip.canvasPadding = 1.5;
+
+    strip.alpha = attachment.a;
+
+    slot.meshes = slot.meshes || {};
+    slot.meshes[attachment.name] = strip;
+
+    return strip;
+};
+
+function SlotContainerUpdateTransformV3()
+{
+    var pt = this.parent.worldTransform;
+    var wt = this.worldTransform;
+    var lt = this.localTransform;
+    wt.a  = lt.a  * pt.a + lt.b  * pt.c;
+    wt.b  = lt.a  * pt.b + lt.b  * pt.d;
+    wt.c  = lt.c  * pt.a + lt.d  * pt.c;
+    wt.d  = lt.c  * pt.b + lt.d  * pt.d;
+    wt.tx = lt.tx * pt.a + lt.ty * pt.c + pt.tx;
+    wt.ty = lt.tx * pt.b + lt.ty * pt.d + pt.ty;
+    this.worldAlpha = this.alpha * this.parent.worldAlpha;
+    this._currentBounds = null;
+};
+
+},{"../SpineRuntime":44,"../loaders/atlasParser":47}],3:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.Animation = function (name, timelines, duration)
 {
@@ -80,7 +442,7 @@ spine.Animation.linearSearch = function (values, target, step)
 };
 module.exports = spine.Animation;
 
-},{"../SpineUtil":44}],3:[function(require,module,exports){
+},{"../SpineUtil":45}],4:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.TrackEntry = require('./TrackEntry');
 spine.AnimationState = function (stateData)
@@ -301,7 +663,7 @@ spine.AnimationState.prototype = {
 module.exports = spine.AnimationState;
 
 
-},{"../SpineUtil":44,"./TrackEntry":37}],4:[function(require,module,exports){
+},{"../SpineUtil":45,"./TrackEntry":38}],5:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.AnimationStateData = function (skeletonData)
 {
@@ -331,7 +693,7 @@ spine.AnimationStateData.prototype = {
 module.exports = spine.AnimationStateData;
 
 
-},{"../SpineUtil":44}],5:[function(require,module,exports){
+},{"../SpineUtil":45}],6:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.AtlasReader = require('./AtlasReader');
 spine.AtlasPage = require('./AtlasPage');
@@ -577,7 +939,7 @@ spine.Atlas.TextureWrap = {
 };
 module.exports = spine.Atlas;
 
-},{"../SpineUtil":44,"../loaders/syncImageLoaderAdapter.js":50,"./AtlasPage":7,"./AtlasReader":8,"./AtlasRegion":9}],6:[function(require,module,exports){
+},{"../SpineUtil":45,"../loaders/syncImageLoaderAdapter.js":50,"./AtlasPage":8,"./AtlasReader":9,"./AtlasRegion":10}],7:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.RegionAttachment = require('./RegionAttachment');
 spine.MeshAttachment = require('./MeshAttachment');
@@ -629,7 +991,7 @@ spine.AtlasAttachmentParser.prototype = {
 module.exports = spine.AtlasAttachmentParser;
 
 
-},{"../SpineUtil":44,"./BoundingBoxAttachment":14,"./MeshAttachment":25,"./RegionAttachment":26,"./WeightedMeshAttachment":42}],7:[function(require,module,exports){
+},{"../SpineUtil":45,"./BoundingBoxAttachment":15,"./MeshAttachment":26,"./RegionAttachment":27,"./WeightedMeshAttachment":43}],8:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.AtlasPage = function ()
 {};
@@ -647,7 +1009,7 @@ spine.AtlasPage.prototype = {
 module.exports = spine.AtlasPage;
 
 
-},{"../SpineUtil":44}],8:[function(require,module,exports){
+},{"../SpineUtil":45}],9:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.AtlasReader = function (text)
 {
@@ -692,7 +1054,7 @@ spine.AtlasReader.prototype = {
 module.exports = spine.AtlasReader;
 
 
-},{"../SpineUtil":44}],9:[function(require,module,exports){
+},{"../SpineUtil":45}],10:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.AtlasRegion = function ()
 {};
@@ -825,7 +1187,7 @@ Object.defineProperties(spine.AtlasRegion.prototype, {
 module.exports = spine.AtlasRegion;
 
 
-},{"../SpineUtil":44}],10:[function(require,module,exports){
+},{"../SpineUtil":45}],11:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.Curves = require('./Curves');
 spine.Animation = require('./Animation');
@@ -869,7 +1231,7 @@ spine.AttachmentTimeline.prototype = {
 module.exports = spine.AttachmentTimeline;
 
 
-},{"../SpineUtil":44,"./Animation":2,"./Curves":16}],11:[function(require,module,exports){
+},{"../SpineUtil":45,"./Animation":3,"./Curves":17}],12:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.AttachmentType = {
     region: 0,
@@ -883,7 +1245,7 @@ spine.AttachmentType = {
 module.exports = spine.AttachmentType;
 
 
-},{"../SpineUtil":44}],12:[function(require,module,exports){
+},{"../SpineUtil":45}],13:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.Bone = function (boneData, skeleton, parent)
 {
@@ -1094,7 +1456,7 @@ Object.defineProperties(spine.Bone.prototype, {
 
 module.exports = spine.Bone;
 
-},{"../SpineUtil":44}],13:[function(require,module,exports){
+},{"../SpineUtil":45}],14:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.BoneData = function (name, parent)
 {
@@ -1113,7 +1475,7 @@ spine.BoneData.prototype = {
 module.exports = spine.BoneData;
 
 
-},{"../SpineUtil":44}],14:[function(require,module,exports){
+},{"../SpineUtil":45}],15:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.AttachmentType = require('./AttachmentType');
 spine.BoundingBoxAttachment = function (name)
@@ -1141,7 +1503,7 @@ spine.BoundingBoxAttachment.prototype = {
 module.exports = spine.BoundingBoxAttachment;
 
 
-},{"../SpineUtil":44,"./AttachmentType":11}],15:[function(require,module,exports){
+},{"../SpineUtil":45,"./AttachmentType":12}],16:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.Animation = require('./Animation');
 spine.Curves = require('./Curves');
@@ -1214,7 +1576,7 @@ spine.ColorTimeline.prototype = {
 module.exports = spine.ColorTimeline;
 
 
-},{"../SpineUtil":44,"./Animation":2,"./Curves":16}],16:[function(require,module,exports){
+},{"../SpineUtil":45,"./Animation":3,"./Curves":17}],17:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.Curves = function (frameCount)
 {
@@ -1293,7 +1655,7 @@ spine.Curves.prototype = {
 module.exports = spine.Curves;
 
 
-},{"../SpineUtil":44}],17:[function(require,module,exports){
+},{"../SpineUtil":45}],18:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.Animation = require('./Animation');
 spine.DrawOrderTimeline = function (frameCount)
@@ -1340,7 +1702,7 @@ spine.DrawOrderTimeline.prototype = {
 module.exports = spine.DrawOrderTimeline;
 
 
-},{"../SpineUtil":44,"./Animation":2}],18:[function(require,module,exports){
+},{"../SpineUtil":45,"./Animation":3}],19:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.Event = function (data)
 {
@@ -1354,7 +1716,7 @@ spine.Event.prototype = {
 module.exports = spine.Event;
 
 
-},{"../SpineUtil":44}],19:[function(require,module,exports){
+},{"../SpineUtil":45}],20:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.EventData = function (name)
 {
@@ -1368,7 +1730,7 @@ spine.EventData.prototype = {
 module.exports = spine.EventData;
 
 
-},{"../SpineUtil":44}],20:[function(require,module,exports){
+},{"../SpineUtil":45}],21:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.Animation = require('./Animation');
 spine.EventTimeline = function (frameCount)
@@ -1425,7 +1787,7 @@ spine.EventTimeline.prototype = {
 module.exports = spine.EventTimeline;
 
 
-},{"../SpineUtil":44,"./Animation":2}],21:[function(require,module,exports){
+},{"../SpineUtil":45,"./Animation":3}],22:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.Animation = require('./Animation');
 spine.Curves = require('./Curves');
@@ -1511,7 +1873,7 @@ spine.FfdTimeline.prototype = {
 module.exports = spine.FfdTimeline;
 
 
-},{"../SpineUtil":44,"./Animation":2,"./Curves":16}],22:[function(require,module,exports){
+},{"../SpineUtil":45,"./Animation":3,"./Curves":17}],23:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.IkConstraint = function (data, skeleton)
 {
@@ -1688,7 +2050,7 @@ spine.IkConstraint.apply2 = function (parent, child, targetX, targetY, bendDir, 
 module.exports = spine.IkConstraint;
 
 
-},{"../SpineUtil":44}],23:[function(require,module,exports){
+},{"../SpineUtil":45}],24:[function(require,module,exports){
 var spine = require('../SpineUtil') || {};
 spine.IkConstraintData = function (name)
 {
@@ -1703,7 +2065,7 @@ spine.IkConstraintData.prototype = {
 module.exports = spine.IkConstraintData;
 
 
-},{"../SpineUtil":44}],24:[function(require,module,exports){
+},{"../SpineUtil":45}],25:[function(require,module,exports){
 var spine = require('../SpineUtil') || {};
 spine.Animation = require('./Animation');
 spine.Curves = require('./Curves');
@@ -1755,7 +2117,7 @@ spine.IkConstraintTimeline.prototype = {
 module.exports = spine.IkConstraintTimeline;
 
 
-},{"../SpineUtil":44,"./Animation":2,"./Curves":16}],25:[function(require,module,exports){
+},{"../SpineUtil":45,"./Animation":3,"./Curves":17}],26:[function(require,module,exports){
 var spine = require('../SpineUtil') || {};
 spine.AttachmentType = require('./AttachmentType');
 spine.MeshAttachment = function (name)
@@ -1831,7 +2193,7 @@ spine.MeshAttachment.prototype = {
 module.exports = spine.MeshAttachment;
 
 
-},{"../SpineUtil":44,"./AttachmentType":11}],26:[function(require,module,exports){
+},{"../SpineUtil":45,"./AttachmentType":12}],27:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.AttachmentType = require('./AttachmentType');
 spine.RegionAttachment = function (name)
@@ -1926,7 +2288,7 @@ spine.RegionAttachment.prototype = {
 module.exports = spine.RegionAttachment;
 
 
-},{"../SpineUtil":44,"./AttachmentType":11}],27:[function(require,module,exports){
+},{"../SpineUtil":45,"./AttachmentType":12}],28:[function(require,module,exports){
 var spine = require('../SpineUtil') || {};
 spine.Animation = require('./Animation');
 spine.Curves = require('./Curves');
@@ -1989,7 +2351,7 @@ spine.RotateTimeline.prototype = {
 module.exports = spine.RotateTimeline;
 
 
-},{"../SpineUtil":44,"./Animation":2,"./Curves":16}],28:[function(require,module,exports){
+},{"../SpineUtil":45,"./Animation":3,"./Curves":17}],29:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.Animation = require('./Animation');
 spine.Curves = require('./Curves');
@@ -2041,7 +2403,7 @@ spine.ScaleTimeline.prototype = {
 module.exports = spine.ScaleTimeline;
 
 
-},{"../SpineUtil":44,"./Animation":2,"./Curves":16}],29:[function(require,module,exports){
+},{"../SpineUtil":45,"./Animation":3,"./Curves":17}],30:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.Animation = require('./Animation');
 spine.Curves = require('./Curves');
@@ -2093,7 +2455,7 @@ spine.ShearTimeline.prototype = {
 module.exports = spine.ShearTimeline;
 
 
-},{"../SpineUtil":44,"./Animation":2,"./Curves":16}],30:[function(require,module,exports){
+},{"../SpineUtil":45,"./Animation":3,"./Curves":17}],31:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.Bone = require('./Bone');
 spine.Slot = require('./Slot');
@@ -2357,7 +2719,7 @@ spine.Skeleton.prototype = {
 module.exports = spine.Skeleton;
 
 
-},{"../SpineUtil":44,"./Bone":12,"./IkConstraint":22,"./Slot":35}],31:[function(require,module,exports){
+},{"../SpineUtil":45,"./Bone":13,"./IkConstraint":23,"./Slot":36}],32:[function(require,module,exports){
 var spine = require('../SpineRuntime') || {};
 spine.AttachmentType = require('./AttachmentType');
 spine.SkeletonBounds = function ()
@@ -2531,7 +2893,7 @@ spine.SkeletonBounds.prototype = {
 module.exports = spine.SkeletonBounds;
 
 
-},{"../SpineRuntime":43,"./AttachmentType":11}],32:[function(require,module,exports){
+},{"../SpineRuntime":44,"./AttachmentType":12}],33:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.SkeletonData = function ()
 {
@@ -2626,7 +2988,7 @@ spine.SkeletonData.prototype = {
 module.exports = spine.SkeletonData;
 
 
-},{"../SpineUtil":44}],33:[function(require,module,exports){
+},{"../SpineUtil":45}],34:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.SkeletonData = require('./SkeletonData');
 spine.BoneData = require('./BoneData');
@@ -3316,7 +3678,7 @@ spine.SkeletonJsonParser.prototype = {
 module.exports = spine.SkeletonJsonParser;
 
 
-},{"../SpineUtil":44,"./Animation":2,"./AttachmentTimeline":10,"./AttachmentType":11,"./BoneData":13,"./ColorTimeline":15,"./DrawOrderTimeline":17,"./Event":18,"./EventData":19,"./EventTimeline":20,"./FfdTimeline":21,"./IkConstraintData":23,"./IkConstraintTimeline":24,"./RotateTimeline":27,"./ScaleTimeline":28,"./ShearTimeline":29,"./SkeletonData":32,"./Skin":34,"./SlotData":36,"./TransformConstraintData":39,"./TransformConstraintTimeline":40,"./TranslateTimeline":41}],34:[function(require,module,exports){
+},{"../SpineUtil":45,"./Animation":3,"./AttachmentTimeline":11,"./AttachmentType":12,"./BoneData":14,"./ColorTimeline":16,"./DrawOrderTimeline":18,"./Event":19,"./EventData":20,"./EventTimeline":21,"./FfdTimeline":22,"./IkConstraintData":24,"./IkConstraintTimeline":25,"./RotateTimeline":28,"./ScaleTimeline":29,"./ShearTimeline":30,"./SkeletonData":33,"./Skin":35,"./SlotData":37,"./TransformConstraintData":40,"./TransformConstraintTimeline":41,"./TranslateTimeline":42}],35:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.Skin = function (name)
 {
@@ -3340,7 +3702,7 @@ spine.Skin.prototype = {
             var slotIndex = parseInt(key.substring(0, colon));
             var name = key.substring(colon + 1);
             var slot = skeleton.slots[slotIndex];
-            if (slot.attachment && slot.attachment.name == name)
+            if (slot.attachment && (slot.attachment.name === name) || (slot.data.attachmentName === name))
             {
                 var attachment = this.getAttachment(slotIndex, name);
                 if (attachment) slot.setAttachment(attachment);
@@ -3351,7 +3713,7 @@ spine.Skin.prototype = {
 module.exports = spine.Skin;
 
 
-},{"../SpineUtil":44}],35:[function(require,module,exports){
+},{"../SpineUtil":45}],36:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.Slot = function (slotData, bone)
 {
@@ -3401,7 +3763,7 @@ spine.Slot.prototype = {
 module.exports = spine.Slot;
 
 
-},{"../SpineUtil":44}],36:[function(require,module,exports){
+},{"../SpineUtil":45}],37:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.SlotData = function (name, boneData)
 {
@@ -3428,7 +3790,7 @@ spine.SlotData.prototype = {
 module.exports = spine.SlotData;
 
 
-},{"../SpineUtil":44}],37:[function(require,module,exports){
+},{"../SpineUtil":45}],38:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.TrackEntry = function ()
 {};
@@ -3444,7 +3806,7 @@ spine.TrackEntry.prototype = {
 module.exports = spine.TrackEntry;
 
 
-},{"../SpineUtil":44}],38:[function(require,module,exports){
+},{"../SpineUtil":45}],39:[function(require,module,exports){
 var spine = require('../SpineUtil');
 var tempVec = [0, 0];
 spine.TransformConstraint = function (data, skeleton)
@@ -3529,7 +3891,7 @@ spine.TransformConstraint.prototype = {
 
 module.exports = spine.TransformConstraint;
 
-},{"../SpineUtil":44}],39:[function(require,module,exports){
+},{"../SpineUtil":45}],40:[function(require,module,exports){
 var spine = require('../SpineUtil') || {};
 spine.TransformConstraintData = function (name)
 {
@@ -3552,7 +3914,7 @@ spine.TransformConstraintData.prototype = {
 module.exports = spine.TransformConstraintData;
 
 
-},{"../SpineUtil":44}],40:[function(require,module,exports){
+},{"../SpineUtil":45}],41:[function(require,module,exports){
 var spine = require('../SpineUtil') || {};
 spine.Animation = require('./Animation');
 spine.Curves = require('./Curves');
@@ -3613,7 +3975,7 @@ spine.TransformConstraintTimeline.prototype = {
 module.exports = spine.TransformConstraintTimeline;
 
 
-},{"../SpineUtil":44,"./Animation":2,"./Curves":16}],41:[function(require,module,exports){
+},{"../SpineUtil":45,"./Animation":3,"./Curves":17}],42:[function(require,module,exports){
 var spine = require('../SpineUtil');
 spine.Animation = require('./Animation');
 spine.Curves = require('./Curves');
@@ -3665,7 +4027,7 @@ spine.TranslateTimeline.prototype = {
 module.exports = spine.TranslateTimeline;
 
 
-},{"../SpineUtil":44,"./Animation":2,"./Curves":16}],42:[function(require,module,exports){
+},{"../SpineUtil":45,"./Animation":3,"./Curves":17}],43:[function(require,module,exports){
 var spine = require('../SpineUtil') || {};
 spine.AttachmentType = require('./AttachmentType');
 spine.WeightedMeshAttachment = function (name)
@@ -3776,7 +4138,7 @@ spine.WeightedMeshAttachment.prototype = {
 module.exports = spine.WeightedMeshAttachment;
 
 
-},{"../SpineUtil":44,"./AttachmentType":11}],43:[function(require,module,exports){
+},{"../SpineUtil":45,"./AttachmentType":12}],44:[function(require,module,exports){
 /******************************************************************************
  * Spine Runtimes Software License
  * Version 2.1
@@ -3850,7 +4212,7 @@ spine.TrackEntry = require('./TrackEntry');
 spine.TranslateTimeline = require('./TranslateTimeline');
 module.exports = spine;
 
-},{"../SpineUtil":44,"./Animation":2,"./AnimationState":3,"./AnimationStateData":4,"./Atlas":5,"./AtlasAttachmentParser":6,"./AtlasPage":7,"./AtlasReader":8,"./AtlasRegion":9,"./AttachmentTimeline":10,"./AttachmentType":11,"./Bone":12,"./BoneData":13,"./BoundingBoxAttachment":14,"./ColorTimeline":15,"./Curves":16,"./DrawOrderTimeline":17,"./Event":18,"./EventData":19,"./EventTimeline":20,"./FfdTimeline":21,"./IkConstraint":22,"./IkConstraintData":23,"./IkConstraintTimeline":24,"./MeshAttachment":25,"./RegionAttachment":26,"./RotateTimeline":27,"./ScaleTimeline":28,"./ShearTimeline":29,"./Skeleton":30,"./SkeletonBounds":31,"./SkeletonData":32,"./SkeletonJsonParser":33,"./Skin.js":34,"./Slot":35,"./SlotData":36,"./TrackEntry":37,"./TransformConstraint":38,"./TransformConstraintData":39,"./TransformConstraintTimeline":40,"./TranslateTimeline":41,"./WeightedMeshAttachment":42}],44:[function(require,module,exports){
+},{"../SpineUtil":45,"./Animation":3,"./AnimationState":4,"./AnimationStateData":5,"./Atlas":6,"./AtlasAttachmentParser":7,"./AtlasPage":8,"./AtlasReader":9,"./AtlasRegion":10,"./AttachmentTimeline":11,"./AttachmentType":12,"./Bone":13,"./BoneData":14,"./BoundingBoxAttachment":15,"./ColorTimeline":16,"./Curves":17,"./DrawOrderTimeline":18,"./Event":19,"./EventData":20,"./EventTimeline":21,"./FfdTimeline":22,"./IkConstraint":23,"./IkConstraintData":24,"./IkConstraintTimeline":25,"./MeshAttachment":26,"./RegionAttachment":27,"./RotateTimeline":28,"./ScaleTimeline":29,"./ShearTimeline":30,"./Skeleton":31,"./SkeletonBounds":32,"./SkeletonData":33,"./SkeletonJsonParser":34,"./Skin.js":35,"./Slot":36,"./SlotData":37,"./TrackEntry":38,"./TransformConstraint":39,"./TransformConstraintData":40,"./TransformConstraintTimeline":41,"./TranslateTimeline":42,"./WeightedMeshAttachment":43}],45:[function(require,module,exports){
 module.exports = {
     radDeg: 180 / Math.PI,
     degRad: Math.PI / 180,
@@ -3865,369 +4227,7 @@ module.exports = {
 };
 
 
-},{}],45:[function(require,module,exports){
-var spine = require('../SpineRuntime');
-var atlasParser = require('../loaders/atlasParser');
-
-/* Esoteric Software SPINE wrapper for pixi.js */
-spine.Bone.yDown = true;
-
-/**
- * A class that enables the you to import and run your spine animations in pixi.
- * The Spine animation data needs to be loaded using either the Loader or a SpineLoader before it can be used by this class
- * See example 12 (http://www.goodboydigital.com/pixijs/examples/12/) to see a working example and check out the source
- *
- * ```js
- * var spineAnimation = new PIXI.Spine(spineData);
- * ```
- *
- * @class
- * @extends Container
- * @memberof PIXI.spine
- * @param spineData {object} The spine data loaded from a spine atlas.
- */
-function Spine(spineData)
-{
-    PIXI.Container.call(this);
-
-    if (!spineData)
-    {
-        throw new Error('The spineData param is required.');
-    }
-
-    if ((typeof spineData) === "string")
-    {
-        throw new Error('spineData param cant be string. Please use PIXI.spine.Spine.fromAtlas("YOUR_RESOURCE_NAME") from now on.');
-    }
-
-    /**
-     * The spineData object
-     *
-     * @member {object}
-     */
-    this.spineData = spineData;
-
-    /**
-     * A spine Skeleton object
-     *
-     * @member {object}
-     */
-    this.skeleton = new spine.Skeleton(spineData);
-    this.skeleton.updateWorldTransform();
-
-    /**
-     * A spine AnimationStateData object created from the spine data passed in the constructor
-     *
-     * @member {object}
-     */
-    this.stateData = new spine.AnimationStateData(spineData);
-
-    /**
-     * A spine AnimationState object created from the spine AnimationStateData object
-     *
-     * @member {object}
-     */
-    this.state = new spine.AnimationState(this.stateData);
-
-    /**
-     * An array of containers
-     *
-     * @member {Container[]}
-     */
-    this.slotContainers = [];
-
-    for (var i = 0, n = this.skeleton.slots.length; i < n; i++)
-    {
-        var slot = this.skeleton.slots[i];
-        var attachment = slot.attachment;
-        var slotContainer = new PIXI.Container();
-        this.slotContainers.push(slotContainer);
-        this.addChild(slotContainer);
-
-        if (attachment instanceof spine.RegionAttachment)
-        {
-            var spriteName = attachment.rendererObject.name;
-            var sprite = this.createSprite(slot, attachment);
-            slot.currentSprite = sprite;
-            slot.currentSpriteName = spriteName;
-            slotContainer.addChild(sprite);
-        }
-        else if (attachment instanceof spine.MeshAttachment)
-        {
-            var mesh = this.createMesh(slot, attachment);
-            slot.currentMesh = mesh;
-            slot.currentMeshName = attachment.name;
-            slotContainer.addChild(mesh);
-        }
-        else
-        {
-            continue;
-        }
-
-    }
-
-    /**
-     * Should the Spine object update its transforms
-     *
-     * @member {boolean}
-     */
-    this.autoUpdate = true;
-}
-
-Spine.fromAtlas = function(resourceName) {
-    var skeletonData = atlasParser.AnimCache[resourceName];
-
-    if (!skeletonData)
-    {
-        throw new Error('Spine data "' + resourceName + '" does not exist in the animation cache');
-    }
-
-    return new Spine(skeletonData);
-}
-
-Spine.prototype = Object.create(PIXI.Container.prototype);
-Spine.prototype.constructor = Spine;
-module.exports = Spine;
-
-Spine.globalAutoUpdate = true;
-
-Object.defineProperties(Spine.prototype, {
-    /**
-     * If this flag is set to true, the spine animation will be autoupdated every time
-     * the object id drawn. The down side of this approach is that the delta time is
-     * automatically calculated and you could miss out on cool effects like slow motion,
-     * pause, skip ahead and the sorts. Most of these effects can be achieved even with
-     * autoupdate enabled but are harder to achieve.
-     *
-     * @member {boolean}
-     * @memberof Spine#
-     * @default true
-     */
-    autoUpdate: {
-        get: function ()
-        {
-            return (this.updateTransform === Spine.prototype.autoUpdateTransform);
-        },
-
-        set: function (value)
-        {
-            this.updateTransform = value ? Spine.prototype.autoUpdateTransform : PIXI.Container.prototype.updateTransform;
-        }
-    }
-});
-
-/**
- * Update the spine skeleton and its animations by delta time (dt)
- *
- * @param dt {number} Delta time. Time by which the animation should be updated
- */
-Spine.prototype.update = function (dt)
-{
-    this.state.update(dt);
-    this.state.apply(this.skeleton);
-    this.skeleton.updateWorldTransform();
-
-    var drawOrder = this.skeleton.drawOrder;
-    var slots = this.skeleton.slots;
-
-    for (var i = 0, n = drawOrder.length; i < n; i++)
-    {
-        this.children[i] = this.slotContainers[drawOrder[i]];
-    }
-
-    for (i = 0, n = slots.length; i < n; i++)
-    {
-        var slot = slots[i];
-        var attachment = slot.attachment;
-        var slotContainer = this.slotContainers[i];
-
-        if (!attachment)
-        {
-            slotContainer.visible = false;
-            continue;
-        }
-
-        var type = attachment.type;
-        if (type === spine.AttachmentType.region)
-        {
-            if (attachment.rendererObject)
-            {
-                if (!slot.currentSpriteName || slot.currentSpriteName !== attachment.rendererObject.name)
-                {
-                    var spriteName = attachment.rendererObject.name;
-                    if (slot.currentSprite !== undefined)
-                    {
-                        slot.currentSprite.visible = false;
-                    }
-                    slot.sprites = slot.sprites || {};
-                    if (slot.sprites[spriteName] !== undefined)
-                    {
-                        slot.sprites[spriteName].visible = true;
-                    }
-                    else
-                    {
-                        var sprite = this.createSprite(slot, attachment);
-                        slotContainer.addChild(sprite);
-                    }
-                    slot.currentSprite = slot.sprites[spriteName];
-                    slot.currentSpriteName = spriteName;
-                }
-            }
-
-            if (slotContainer.transform ) {
-                //PIXI v4.0
-                if (!slotContainer.transform._dirtyLocal) {
-                    slotContainer.transform = new PIXI.TransformStatic();
-                }
-                var transform = slotContainer.transform;
-                var lt = transform.localTransform;
-                transform._dirtyParentVersion = -1;
-                transform._dirtyLocal = 1;
-                transform._versionLocal = 1;
-                slot.bone.matrix.copy(lt);
-                lt.tx += slot.bone.skeleton.x;
-                lt.ty += slot.bone.skeleton.y;
-            } else {
-                //PIXI v3
-                var lt = slotContainer.localTransform || new PIXI.Matrix();
-                slot.bone.matrix.copy(lt);
-                lt.tx += slot.bone.skeleton.x;
-                lt.ty += slot.bone.skeleton.y;
-                slotContainer.localTransform = lt;
-                slotContainer.displayObjectUpdateTransform = SlotContainerUpdateTransformV3;
-            }
-
-            slot.currentSprite.blendMode = slot.blendMode;
-            slot.currentSprite.tint = PIXI.utils.rgb2hex([slot.r,slot.g,slot.b]);
-        }
-        else if (type === spine.AttachmentType.skinnedmesh || type === spine.AttachmentType.mesh)
-        {
-            if (!slot.currentMeshName || slot.currentMeshName !== attachment.name)
-            {
-                var meshName = attachment.name;
-                if (slot.currentMesh !== undefined)
-                {
-                    slot.currentMesh.visible = false;
-                }
-
-                slot.meshes = slot.meshes || {};
-
-                if (slot.meshes[meshName] !== undefined)
-                {
-                    slot.meshes[meshName].visible = true;
-                }
-                else
-                {
-                    var mesh = this.createMesh(slot, attachment);
-                    slotContainer.addChild(mesh);
-                }
-
-                slot.currentMesh = slot.meshes[meshName];
-                slot.currentMeshName = meshName;
-            }
-            attachment.computeWorldVertices(slot.bone.skeleton.x, slot.bone.skeleton.y, slot, slot.currentMesh.vertices);
-        }
-        else
-        {
-            slotContainer.visible = false;
-            continue;
-        }
-        slotContainer.visible = true;
-
-        slotContainer.alpha = slot.a;
-    }
-};
-
-/**
- * When autoupdate is set to yes this function is used as pixi's updateTransform function
- *
- * @private
- */
-Spine.prototype.autoUpdateTransform = function ()
-{
-    if (Spine.globalAutoUpdate) {
-        this.lastTime = this.lastTime || Date.now();
-        var timeDelta = (Date.now() - this.lastTime) * 0.001;
-        this.lastTime = Date.now();
-        this.update(timeDelta);
-    } else {
-        this.lastTime = 0;
-    }
-
-    PIXI.Container.prototype.updateTransform.call(this);
-};
-
-/**
- * Create a new sprite to be used with spine.RegionAttachment
- *
- * @param slot {spine.Slot} The slot to which the attachment is parented
- * @param attachment {spine.RegionAttachment} The attachment that the sprite will represent
- * @private
- */
-Spine.prototype.createSprite = function (slot, attachment)
-{
-    var descriptor = attachment.rendererObject;
-    var texture = descriptor.texture;
-    var sprite = new PIXI.Sprite(texture);
-    sprite.scale.x = attachment.scaleX * attachment.width / descriptor.originalWidth;
-    sprite.scale.y = - attachment.scaleY * attachment.height / descriptor.originalHeight;
-    sprite.rotation = attachment.rotation * spine.degRad;
-    sprite.anchor.x = 0.5;
-    sprite.anchor.y = 0.5;
-    sprite.position.x = attachment.x;
-    sprite.position.y = attachment.y;
-    sprite.alpha = attachment.a;
-
-    slot.sprites = slot.sprites || {};
-    slot.sprites[descriptor.name] = sprite;
-    return sprite;
-};
-
-/**
- * Creates a Strip from the spine data
- * @param slot {spine.Slot} The slot to which the attachment is parented
- * @param attachment {spine.RegionAttachment} The attachment that the sprite will represent
- * @private
- */
-Spine.prototype.createMesh = function (slot, attachment)
-{
-    var descriptor = attachment.rendererObject;
-    var baseTexture = descriptor.page.rendererObject;
-    var texture = new PIXI.Texture(baseTexture);
-
-    var strip = new PIXI.mesh.Mesh(
-        texture,
-        new Float32Array(attachment.uvs.length),
-        new Float32Array(attachment.uvs),
-        new Uint16Array(attachment.triangles),
-        PIXI.mesh.Mesh.DRAW_MODES.TRIANGLES);
-
-    strip.canvasPadding = 1.5;
-
-    strip.alpha = attachment.a;
-
-    slot.meshes = slot.meshes || {};
-    slot.meshes[attachment.name] = strip;
-
-    return strip;
-};
-
-function SlotContainerUpdateTransformV3()
-{
-    var pt = this.parent.worldTransform;
-    var wt = this.worldTransform;
-    var lt = this.localTransform;
-    wt.a  = lt.a  * pt.a + lt.b  * pt.c;
-    wt.b  = lt.a  * pt.b + lt.b  * pt.d;
-    wt.c  = lt.c  * pt.a + lt.d  * pt.c;
-    wt.d  = lt.c  * pt.b + lt.d  * pt.d;
-    wt.tx = lt.tx * pt.a + lt.ty * pt.c + pt.tx;
-    wt.ty = lt.tx * pt.b + lt.ty * pt.d + pt.ty;
-    this.worldAlpha = this.alpha * this.parent.worldAlpha;
-    this._currentBounds = null;
-};
-
-},{"../SpineRuntime":43,"../loaders/atlasParser":47}],46:[function(require,module,exports){
+},{}],46:[function(require,module,exports){
 /**
  * @file        Spine resource loader
  * @author      Ivan Popelyshev <ivan.popelyshev@gmail.com>
@@ -4318,7 +4318,7 @@ var atlasParser = module.exports = function () {
 atlasParser.AnimCache = {};
 atlasParser.enableCaching = false;
 
-},{"../SpineRuntime":43,"./imageLoaderAdapter":48}],48:[function(require,module,exports){
+},{"../SpineRuntime":44,"./imageLoaderAdapter":48}],48:[function(require,module,exports){
 var spine = require('../SpineRuntime');
 
 module.exports = function (loader, namePrefix, baseUrl, imageOptions) {
@@ -4335,7 +4335,7 @@ module.exports = function (loader, namePrefix, baseUrl, imageOptions) {
     }
 };
 
-},{"../SpineRuntime":43}],49:[function(require,module,exports){
+},{"../SpineRuntime":44}],49:[function(require,module,exports){
 module.exports = {
     atlasParser: require('./atlasParser'),
     Loader: require('./Loader'),
@@ -4356,7 +4356,7 @@ module.exports = function (baseUrl, crossOrigin) {
     }
 };
 
-},{"../SpineRuntime":43}]},{},[1])
+},{"../SpineRuntime":44}]},{},[1])
 
 
 //# sourceMappingURL=pixi-spine.js.map

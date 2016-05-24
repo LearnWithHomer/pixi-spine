@@ -21,7 +21,7 @@ spine.Skin.prototype = {
             var slotIndex = parseInt(key.substring(0, colon));
             var name = key.substring(colon + 1);
             var slot = skeleton.slots[slotIndex];
-            if (slot.attachment && slot.attachment.name == name)
+            if (slot.attachment && (slot.attachment.name === name) || (slot.data.attachmentName === name))
             {
                 var attachment = this.getAttachment(slotIndex, name);
                 if (attachment) slot.setAttachment(attachment);
